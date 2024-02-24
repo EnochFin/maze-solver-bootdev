@@ -1,3 +1,4 @@
+import random
 from tkinter import Tk, BOTH, Canvas
 from typing import Any
 import time
@@ -51,15 +52,16 @@ class Cell:
         self.right_wall = True
         self.top_wall = True
         self.bottom_wall = True
-        self._coords = line
+        self.coords = line
         self._win = window
+        self.visited = False
 
     def _wall_color(self, wall_up):
         return 'black' if wall_up else 'white'
 
     def draw(self):
-        p1 = self._coords.p1
-        p2 = self._coords.p2
+        p1 = self.coords.p1
+        p2 = self.coords.p2
         # top line
         self._win.draw_line(Line(Point(p1.x, p1.y), Point(p2.x, p1.y)), self._wall_color(self.top_wall))
         # bottom
@@ -70,10 +72,12 @@ class Cell:
         self._win.draw_line(Line(Point(p2.x, p1.y), Point(p2.x, p2.y)), self._wall_color(self.right_wall))
 
     def draw_move(self, to_cell, undo=False):
-        p1 = self._coords.p1
-        p2 = self._coords.p2
+        p1 = self.coords.p1
+        p2 = self.coords.p2
+        to_p1 = to_cell.coords.p1
+        to_p2 = to_cell.coords.p2
         my_center = Point((p1.x + p2.x) // 2, (p1.y + p2.y) // 2)
-        to_center = Point((to_cell._x1 + to_cell._x2) // 2, (to_cell._y1 + to_cell._y2) // 2)
+        to_center = Point((to_p1.x + to_p2.x) // 2, (to_p1.y + to_p2.y) // 2)
         color = 'red' if undo else 'gray'
         self._win.draw_line(Line(my_center, to_center), color)
 
@@ -92,8 +96,12 @@ class Maze:
             num_cols,
             cell_size_x,
             cell_size_y,
-            win
+            win,
+            seed = None,
+            speed = 0.05,
             ) :
+        if num_cols < 1 or num_rows < 1:
+            raise Exception('There must be at least 1 column and row')
         self.x1 = x1
         self.y1 = y1
         self.num_rows = num_rows
@@ -101,6 +109,11 @@ class Maze:
         self.cell_size_x = cell_size_x
         self.cell_size_y = cell_size_y
         self._win = win
+        self._speed = speed
+        self._drawing = win is not None
+        if seed is not None:
+            random.seed(seed)
+
         self._create_cells()
 
     def _create_cells(self):
@@ -117,16 +130,119 @@ class Maze:
                             self._win)]
             self._cells += [row]
 
-    def _draw_cell(self, i, j):
-        self._cells[i][j].draw()
+    def _get_need_visit(self, i, j, visited = False):
+        need_visit = []
+        # check left
+        if i > 0:
+            if self._cells[i - 1][j].visited == visited:
+                need_visit += [(i - 1, j)]
+        # check right
+        if i < len(self._cells) - 1:
+            if self._cells[i + 1][j].visited == visited:
+                need_visit += [(i + 1, j)]
+        # check top
+        if j > 0:
+            if self._cells[i][j - 1].visited == visited:
+                need_visit += [(i, j - 1)]
+        # check bottom
+        if j < len(self._cells[0]) - 1:
+            if self._cells[i][j + 1].visited == visited:
+                need_visit += [(i, j + 1)]
+        return need_visit
+    
+    def _break_wall(self, i, j, to_i, to_j):
+        curr = self._cells[i][j]
+        to_cell = self._cells[to_i][to_j]
+        if to_i < i:
+            # left
+            curr.left_wall = False
+            to_cell.right_wall = False
+        elif to_i > i:
+            # right
+            curr.right_wall = False
+            to_cell.left_wall = False
+        elif to_j < j:
+            # top
+            curr.top_wall = False
+            to_cell.bottom_wall = False
+        elif to_j > j:
+            # bottom
+            curr.bottom_wall = False
+            to_cell.top_wall = False
+
+    def _get_available_adjacent(self, i, j, adjacent):
+        result = []
+        curr = self._cells[i][j]
+        for to_i, to_j in adjacent:
+            to_cell = self._cells[to_i][to_j]
+            if to_cell.visited is False:
+                left = to_i < i and not curr.left_wall
+                right = to_i > i and not curr.right_wall
+                top = to_j < j and not curr.top_wall
+                bottom = to_j > j and not curr.bottom_wall
+                if left or right or top or bottom:
+                    result += [(to_i, to_j, to_cell)]
+        return result
+    
+    def break_walls(self):
+        self._break_walls_r(0, 0)
+        self._break_entrance_and_exit()
+        self._reset_cells_visited()
+
+    def _break_walls_r(self, i, j):
+        curr = self._cells[i][j]
+        curr.visited = True
+        while True:
+            need_visit = self._get_need_visit(i, j)
+            if len(need_visit) == 0:
+                if self._drawing:
+                    self._draw_cell(i, j)
+                return
+            rand_dir = random.choice(need_visit)
+            to_i = rand_dir[0]
+            to_j = rand_dir[1]
+            self._break_wall(i, j, to_i, to_j)
+            self._break_walls_r(to_i, to_j)
+    
+    def solve(self):
+        return self._solve_r(0, 0)
+    
+    def _solve_r(self, i, j):
         self._animate()
+        curr = self._cells[i][j]
+        curr.visited = True
+        if i == len(self._cells)-1 and j == len(self._cells[0])-1:
+            return True
+        adjacent = self._get_need_visit(i, j)
+        avail_adj = self._get_available_adjacent(i, j, adjacent)
+        for to_i, to_j, adj in avail_adj:
+            if self._drawing:
+                curr.draw_move(adj)
+            if self._solve_r(to_i, to_j):
+                return True
+            if self._drawing:
+                curr.draw_move(adj, undo=True)
+        return False
+
+
+    def _draw_cell(self, i, j):
+        if self._drawing:
+            self._cells[i][j].draw()
+            self._animate()
 
     def _animate(self):
         self._win.redraw()
-        time.sleep(0.05)
+        time.sleep(self._speed)
 
     def _break_entrance_and_exit(self):
         entrance = self._cells[0][0]
-        exit = self._cells[-1][-1]
+        ext = self._cells[-1][-1]
         entrance.clear_walls()
-        exit.clear_walls()
+        ext.clear_walls()
+        self._draw_cell(0,0)
+        self._draw_cell(-1,-1)
+
+    def _reset_cells_visited(self):
+        for x in range(self.num_cols):
+            for y in range(self.num_rows):
+                self._cells[x][y].visited = False
